@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 API_URL = "https://v3.football.api-sports.io/fixtures"
 SETTLED_STATUS = {"FT", "AET", "PEN"}
 LIVE_STATUS = {"1H", "HT", "2H", "ET", "BT", "P", "INT", "LIVE"}
+SETTLED_ARCHIVE_EXTRA_DAYS = 23
 
 
 def normalize_fixture(raw: dict) -> dict:
@@ -66,20 +67,44 @@ def fetch_day(day: date, key: str) -> list[dict]:
     return [normalize_fixture(item) for item in fixtures]
 
 
+def retained_settled_fixtures(output: Path, day_from: date) -> list[dict]:
+    """Keep older observed results for a month without spending more API calls."""
+    if not output.is_file():
+        return []
+    previous = json.loads(output.read_text(encoding="utf-8"))
+    if previous.get("schema_version") != 1 or not isinstance(previous.get("fixtures"), list):
+        raise RuntimeError("existing feed is invalid; refusing to discard archived results")
+    archive_from = day_from - timedelta(days=SETTLED_ARCHIVE_EXTRA_DAYS)
+    retained = []
+    for fixture in previous["fixtures"]:
+        if not isinstance(fixture, dict) or fixture.get("winner_1x2") not in {"HOME", "DRAW", "AWAY"}:
+            continue
+        try:
+            kickoff_day = date.fromisoformat(fixture["kickoff_utc"][:10])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if archive_from <= kickoff_day < day_from:
+            retained.append(fixture)
+    return retained
+
+
 def export(day_from: date, day_to: date, output: Path, key: str) -> dict:
     if day_to < day_from or (day_to - day_from).days > 14:
         raise ValueError("date range must span 0..14 days")
-    fixtures = []
+    fixtures_by_id = {item["id"]: item for item in retained_settled_fixtures(output, day_from)}
     day = day_from
     while day <= day_to:
-        fixtures.extend(fetch_day(day, key))
+        for fixture in fetch_day(day, key):
+            fixtures_by_id[fixture["id"]] = fixture
         day += timedelta(days=1)
+    fixtures = list(fixtures_by_id.values())
     fixtures.sort(key=lambda item: (item["kickoff_utc"], item["id"]))
     payload = {
         "schema_version": 1,
         "source": "API-Sports Football v3",
         "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "range": {"from": day_from.isoformat(), "to": day_to.isoformat()},
+        "settled_archive_from": (day_from - timedelta(days=SETTLED_ARCHIVE_EXTRA_DAYS)).isoformat(),
         "fixture_count": len(fixtures),
         "fixtures": fixtures,
     }

@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Check feed retention
+        run: python -m unittest -v test_retained_feed.py
       - name: Export a rolling football window
         env:
           API_SPORTS_KEY_2: ${{ secrets.API_SPORTS_KEY_2 }}
