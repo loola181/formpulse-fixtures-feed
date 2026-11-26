@@ -1,0 +1,50 @@
+name: Update football fixtures
+
+on:
+  schedule:
+    - cron: '17 */8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: football-feed
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Export a rolling football window
+        env:
+          API_SPORTS_KEY_2: ${{ secrets.API_SPORTS_KEY_2 }}
+        run: |
+          python - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+          import os
+          from export_feed import export
+
+          today = datetime.now(timezone.utc).date()
+          result = export(
+              today - timedelta(days=7),
+              today + timedelta(days=6),
+              Path('docs/fixtures.json'),
+              os.environ['API_SPORTS_KEY_2'],
+          )
+          print(f"Exported {result['fixture_count']} football fixtures")
+          PY
+      - name: Commit refreshed public data
+        run: |
+          git config user.name 'formpulse-feed-bot'
+          git config user.email 'support@kovelapps.pro'
+          git add docs/fixtures.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'data: refresh football fixtures'
+            git push
+          fi
